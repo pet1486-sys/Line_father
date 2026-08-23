@@ -43,7 +43,7 @@ def save_or_update_entry(sheet, date_str, amount):
 
     return (
         f"✅บันทึกยอดวันที่ {day_num} เรียบร้อยครับ\n"
-        f"💵ปะยางวันนี้ได้ {amount:,} บาท"
+        f"ปะยางวันนี้ได้ {amount:,} บาท"
     )
 
 @app.route("/", methods=['GET'])
@@ -116,7 +116,7 @@ def handle_message(event):
 
             reply_txt = (
                 f"📊สรุปยอดปะยาง เดือน {month_display}\n"
-                f"🟢ทำงาน : {work_days}วัน 🔴หยุด : {off_days}วัน\n"
+                f"🟢ทำงาน : {work_days}วัน หยุด : {off_days}วัน\n"
                 f"💰ยอดรวม : {total_sum:,.0f} บาท"
             )
         except Exception as e:
