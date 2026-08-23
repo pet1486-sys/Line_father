@@ -95,7 +95,13 @@ def handle_message(event):
         search_prefix = f"{target_year}-{target_month:02d}"
         month_display = f"{target_month:02d}/{target_year}"
 
-        _, total_days_in_month = calendar.monthrange(target_year, target_month)
+        if target_year == now.year and target_month == now.month:
+            days_to_count = now.day
+        elif (target_year < now.year) or (target_year == now.year and target_month < now.month):
+            _, total_days = calendar.monthrange(target_year, target_month)
+            days_to_count = total_days
+        else:
+            days_to_count = 0
 
         try:
             client = get_gspread_client()
@@ -112,12 +118,13 @@ def handle_message(event):
                         total_sum += val
                         work_days += 1
 
-            off_days = total_days_in_month - work_days
+            off_days = max(0, days_to_count - work_days)
 
             reply_txt = (
                 f"📊สรุปยอดปะยาง เดือน {month_display}\n"
-                f"🟢ทำงาน : {work_days}วัน หยุด : {off_days}วัน\n"
-                f"💰ยอดรวม : {total_sum:,.0f} บาท"
+                f"ทำงาน : {work_days} วัน\n"
+                f"หยุด : {off_days} วัน\n"
+                f"ยอดรวม : {total_sum:,.0f} บาท"
             )
         except Exception as e:
             reply_txt = f"เกิดข้อผิดพลาด: {str(e)}"
