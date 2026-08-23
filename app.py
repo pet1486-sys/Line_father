@@ -17,6 +17,11 @@ LINE_CHANNEL_SECRET = os.environ.get('LINE_CHANNEL_SECRET')
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
 
+THAI_MONTHS = [
+    "", "มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน",
+    "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม"
+]
+
 def get_gspread_client():
     import json
     creds_json = json.loads(os.environ.get('GOOGLE_CREDENTIALS_JSON'))
@@ -96,6 +101,7 @@ def handle_message(event):
 
         search_prefix = f"{target_year}-{target_month:02d}"
         month_display = f"{target_month:02d}/{target_year}"
+        thai_month_name = THAI_MONTHS[target_month]
 
         if target_year == now.year and target_month == now.month:
             days_to_check = now.day
@@ -123,10 +129,12 @@ def handle_message(event):
             off_days_list = [d for d in range(1, days_to_check + 1) if d not in recorded_days]
 
             if off_days_list:
-                days_str = ", ".join(map(str, off_days_list))
-                reply_txt = f"🔴 วันที่หยุดในเดือน {month_display} (ถึงวันที่ {days_to_check}):\nวันที่ {days_str}"
+                lines = ["🔴", f"วันที่หยุดในเดือน {month_display}"]
+                for d in off_days_list:
+                    lines.append(f"วันที่ {d} {thai_month_name}")
+                reply_txt = "\n".join(lines)
             else:
-                reply_txt = f"🟢 เดือน {month_display} (ถึงวันที่ {days_to_check}) ทำงานทุกวัน ไม่มีวันหยุดครับ"
+                reply_txt = f"🟢\nเดือน {month_display} ทำงานทุกวัน ไม่มีวันหยุดครับ"
 
         except Exception as e:
             reply_txt = f"เกิดข้อผิดพลาด: {str(e)}"
@@ -209,8 +217,7 @@ def handle_message(event):
                 f"📊สรุปยอดปะยาง เดือน {month_display}\n"
                 f"ทำงาน : {work_days} วัน\n"
                 f"หยุด : {off_days} วัน\n"
-                f"ยอดรวม : {total_sum:,.0f} บาท\n\n"
-                f"💡 พิมพ์ 'หยุดวันอะไร' เพื่อดูวันที่หยุด"
+                f"ยอดรวม : {total_sum:,.0f} บาท"
             )
         except Exception as e:
             reply_txt = f"เกิดข้อผิดพลาด: {str(e)}"
