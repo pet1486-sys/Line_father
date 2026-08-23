@@ -76,11 +76,11 @@ def handle_message(event):
         help_text = (
             "📌 คู่มือการใช้งานบอทบันทึกยอดปะยาง\n\n"
             "1. บันทึกยอดวันนี้:\n"
-            "   พิมพ์ 'ปะยาง [จำนวนเงิน]'\n"
-            "   ตัวอย่าง: ปะยาง 1,200\n\n"
-            "2. บันทึกย้อนหลัง:\n"
-            "   พิมพ์ 'บันทึกย้อนหลัง [YYYY-MM-DD] [จำนวนเงิน]'\n"
-            "   ตัวอย่าง: บันทึกย้อนหลัง 2026-08-20 1,200\n\n"
+            "   - พิมพ์ 'ปะยาง 800' หรือ 'ปะยาง = 800'\n\n"
+            "2. บันทึกย้อนหลังในเดือนนี้:\n"
+            "   - พิมพ์ 'ปะยางวันที่ 9 = 500'\n"
+            "   - พิมพ์ 'ปะยาง วันที่10 = 800 บาท'\n"
+            "   - พิมพ์ 'บันทึกย้อนหลัง 2026-08-20 1,200'\n\n"
             "3. ดูสรุปยอด:\n"
             "   - พิมพ์ 'รวมยอด' (ดูเดือนปัจจุบัน)\n"
             "   - พิมพ์ 'รวมยอด 08/2026' (ดูระบุเดือน/ปี)\n"
@@ -89,7 +89,7 @@ def handle_message(event):
         )
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=help_text))
 
-    # 2. ดูวันที่หยุด (พิมพ์ "หยุดวันอะไร" หรือ "หยุดวันอะไร 08/2026")
+    # 2. ดูวันที่หยุด
     elif user_msg.startswith("หยุดวันอะไร"):
         match_month = re.search(r'(\d{2})/(\d{4})', user_msg)
         if match_month:
@@ -224,7 +224,7 @@ def handle_message(event):
 
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_txt))
 
-    # 5. บันทึกย้อนหลัง
+    # 5. บันทึกย้อนหลังรูปแบบเต็ม (เช่น บันทึกย้อนหลัง 2026-08-20 1200)
     elif user_msg.startswith("บันทึกย้อนหลัง"):
         match = re.search(r'(\d{4}-\d{2}-\d{2})\s+([\d,]+)', user_msg)
         if match:
@@ -237,15 +237,31 @@ def handle_message(event):
                 reply_txt = save_or_update_entry(sheet, target_date, amount)
             except Exception as e:
                 reply_txt = f"บันทึกไม่สำเร็จ: {str(e)}"
-        else:
-            reply_txt = "⚠️ รูปแบบไม่ถูกต้อง ตัวอย่าง:\nบันทึกย้อนหลัง 2026-08-20 1,200"
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_txt))
 
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_txt))
+    # 6. บันทึกย้อนหลังกรณีมีคำว่า "ปะยาง" และ "วันที่" (ประโยคจะยาวแค่ไหนก็บันทึกย้อนหลังตามเลขวันที่ได้)
+    elif "ปะยาง" in user_msg and "วันที่" in user_msg:
+        match_day = re.search(r'วันที่\s*(\d{1,2})', user_msg)
+        numbers = re.findall(r'[\d,]+', user_msg)
+        
+        if match_day and len(numbers) >= 2:
+            day_num = int(match_day.group(1))
+            # ดึงชุดตัวเลขที่ไม่ใช่เลขวันที่มาทำเป็นจำนวนเงิน
+            amounts = [n.replace(',', '') for n in numbers if int(n.replace(',', '')) != day_num]
+            if amounts and 1 <= day_num <= 31:
+                amount = int(amounts[-1])  # ใช้ตัวเลขเงินชุดสุดท้ายในประโยค
+                target_date = f"{now.year}-{now.month:02d}-{day_num:02d}"
+                try:
+                    client = get_gspread_client()
+                    sheet = client.open("LINE_Tire_Income").sheet1
+                    reply_txt = save_or_update_entry(sheet, target_date, amount)
+                except Exception as e:
+                    reply_txt = f"บันทึกไม่สำเร็จ: {str(e)}"
+                line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_txt))
 
-    # 6. บันทึกยอดวันนี้
+    # 7. บันทึกยอดวันนี้ (มีคำว่า "ปะยาง" + มีตัวเลข)
     elif "ปะยาง" in user_msg:
-        clean_msg = user_msg.replace("ปะยาง", "")
-        numbers = re.findall(r'[\d,]+', clean_msg)
+        numbers = re.findall(r'[\d,]+', user_msg)
         if numbers:
             amount_str = numbers[0].replace(',', '')
             if amount_str.isdigit():
@@ -256,5 +272,4 @@ def handle_message(event):
                     reply_txt = save_or_update_entry(sheet, today_date_str, amount)
                 except Exception as e:
                     reply_txt = f"บันทึกไม่สำเร็จ: {str(e)}"
-
                 line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_txt))
