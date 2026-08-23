@@ -78,11 +78,96 @@ def handle_message(event):
             "   ตัวอย่าง: บันทึกย้อนหลัง 2026-08-20 1,200\n\n"
             "3. ดูสรุปยอด:\n"
             "   - พิมพ์ 'รวมยอด' (ดูเดือนปัจจุบัน)\n"
-            "   - พิมพ์ 'รวมยอด 08/2026' (ดูระบุเดือน/ปี)"
+            "   - พิมพ์ 'รวมยอด 08/2026' (ดูระบุเดือน/ปี)\n"
+            "   - พิมพ์ 'รวมยอดปี2026' (ดูสรุปรายปี)\n"
+            "   - พิมพ์ 'หยุดวันอะไร' (ดูวันที่หยุด)"
         )
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=help_text))
 
-    # 2. ดูสรุปยอด
+    # 2. ดูวันที่หยุด (พิมพ์ "หยุดวันอะไร" หรือ "หยุดวันอะไร 08/2026")
+    elif user_msg.startswith("หยุดวันอะไร"):
+        match_month = re.search(r'(\d{2})/(\d{4})', user_msg)
+        if match_month:
+            target_month = int(match_month.group(1))
+            target_year = int(match_month.group(2))
+        else:
+            target_month = now.month
+            target_year = now.year
+
+        search_prefix = f"{target_year}-{target_month:02d}"
+        month_display = f"{target_month:02d}/{target_year}"
+
+        if target_year == now.year and target_month == now.month:
+            days_to_check = now.day
+        elif (target_year < now.year) or (target_year == now.year and target_month < now.month):
+            _, total_days = calendar.monthrange(target_year, target_month)
+            days_to_check = total_days
+        else:
+            days_to_check = 0
+
+        try:
+            client = get_gspread_client()
+            sheet = client.open("LINE_Tire_Income").sheet1
+            records = sheet.get_all_records()
+
+            recorded_days = set()
+            for row in records:
+                date_val = str(row.get('Date', ''))
+                if date_val.startswith(search_prefix):
+                    raw_val = str(row.get('Amount', 0)).replace(',', '')
+                    val = float(raw_val) if raw_val else 0
+                    if val > 0:
+                        day = int(date_val.split('-')[2])
+                        recorded_days.add(day)
+
+            off_days_list = [d for d in range(1, days_to_check + 1) if d not in recorded_days]
+
+            if off_days_list:
+                days_str = ", ".join(map(str, off_days_list))
+                reply_txt = f"🔴 วันที่หยุดในเดือน {month_display} (ถึงวันที่ {days_to_check}):\nวันที่ {days_str}"
+            else:
+                reply_txt = f"🟢 เดือน {month_display} (ถึงวันที่ {days_to_check}) ทำงานทุกวัน ไม่มีวันหยุดครับ"
+
+        except Exception as e:
+            reply_txt = f"เกิดข้อผิดพลาด: {str(e)}"
+
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_txt))
+
+    # 3. ดูสรุปยอดรายปี
+    elif user_msg.startswith("รวมยอดปี"):
+        match_year = re.search(r'\d{4}', user_msg)
+        target_year = match_year.group(0) if match_year else str(now.year)
+
+        try:
+            client = get_gspread_client()
+            sheet = client.open("LINE_Tire_Income").sheet1
+            records = sheet.get_all_records()
+
+            monthly_totals = {}
+
+            for row in records:
+                date_val = str(row.get('Date', ''))
+                if date_val.startswith(f"{target_year}-"):
+                    month = date_val.split('-')[1]
+                    raw_val = str(row.get('Amount', 0)).replace(',', '')
+                    val = float(raw_val) if raw_val else 0
+                    if val > 0:
+                        monthly_totals[month] = monthly_totals.get(month, 0) + val
+
+            if monthly_totals:
+                lines = [f"📋สรุปยอดปะยางปี {target_year}"]
+                for m in sorted(monthly_totals.keys()):
+                    lines.append(f"เดือน {m} = {monthly_totals[m]:,.0f} บาท")
+                reply_txt = "\n".join(lines)
+            else:
+                reply_txt = f"📋สรุปยอดปะยางปี {target_year}\nไม่พบข้อมูลของปีนี้ครับ"
+
+        except Exception as e:
+            reply_txt = f"เกิดข้อผิดพลาด: {str(e)}"
+
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_txt))
+
+    # 4. ดูสรุปยอดรายเดือน
     elif user_msg.startswith("รวมยอด"):
         match_month = re.search(r'(\d{2})/(\d{4})', user_msg)
         if match_month:
@@ -124,14 +209,15 @@ def handle_message(event):
                 f"📊สรุปยอดปะยาง เดือน {month_display}\n"
                 f"ทำงาน : {work_days} วัน\n"
                 f"หยุด : {off_days} วัน\n"
-                f"ยอดรวม : {total_sum:,.0f} บาท"
+                f"ยอดรวม : {total_sum:,.0f} บาท\n\n"
+                f"💡 พิมพ์ 'หยุดวันอะไร' เพื่อดูวันที่หยุด"
             )
         except Exception as e:
             reply_txt = f"เกิดข้อผิดพลาด: {str(e)}"
 
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_txt))
 
-    # 3. บันทึกย้อนหลัง
+    # 5. บันทึกย้อนหลัง
     elif user_msg.startswith("บันทึกย้อนหลัง"):
         match = re.search(r'(\d{4}-\d{2}-\d{2})\s+([\d,]+)', user_msg)
         if match:
@@ -149,7 +235,7 @@ def handle_message(event):
 
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_txt))
 
-    # 4. บันทึกยอดวันนี้
+    # 6. บันทึกยอดวันนี้
     elif "ปะยาง" in user_msg:
         clean_msg = user_msg.replace("ปะยาง", "")
         numbers = re.findall(r'[\d,]+', clean_msg)
