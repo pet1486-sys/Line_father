@@ -4,7 +4,7 @@ import calendar
 from datetime import datetime
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
-from linebot.exceptions import InvalidSignatureError
+from linebot.exceptions import InvalidSignatureError, LineBotApiError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
@@ -22,6 +22,12 @@ THAI_MONTHS = [
     "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม"
 ]
 
+def safe_reply(reply_token, text):
+    try:
+        line_bot_api.reply_message(reply_token, TextSendMessage(text=text))
+    except LineBotApiError as e:
+        print(f"Failed to reply message (token expired/invalid): {e}")
+
 def get_gspread_client():
     import json
     creds_json = json.loads(os.environ.get('GOOGLE_CREDENTIALS_JSON'))
@@ -29,15 +35,28 @@ def get_gspread_client():
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_json, scope)
     return gspread.authorize(creds)
 
+def find_row_index_by_date(sheet, date_str):
+    all_values = sheet.get_all_values()
+    for idx, row in enumerate(all_values, start=1):
+        if len(row) > 0 and str(row[0]).strip() == date_str:
+            return idx
+    return None
+
+def delete_entry(sheet, date_str):
+    row_index = find_row_index_by_date(sheet, date_str)
+    day_num = int(date_str.split('-')[2])
+
+    if row_index:
+        sheet.delete_rows(row_index)
+        return f"🗑️ ลบข้อมูลยอดปะยางวันที่ {day_num} เรียบร้อยแล้วครับ"
+    else:
+        return f"⚠️ ไม่พบข้อมูลของวันที่ {day_num} ในระบบแล้วครับ"
+
 def save_or_update_entry(sheet, date_str, amount):
-    records = sheet.get_all_records()
-    row_index = None
+    if amount == 0:
+        return delete_entry(sheet, date_str)
 
-    for i, row in enumerate(records, start=2):
-        if str(row.get('Date', '')) == date_str:
-            row_index = i
-            break
-
+    row_index = find_row_index_by_date(sheet, date_str)
     day_num = int(date_str.split('-')[2])
 
     if row_index:
@@ -50,22 +69,6 @@ def save_or_update_entry(sheet, date_str, amount):
         f"✅บันทึกยอดวันที่ {day_num} เรียบร้อยครับ\n"
         f"ปะยางวันนี้ได้ {amount:,} บาท"
     )
-
-def delete_entry(sheet, date_str):
-    records = sheet.get_all_records()
-    row_index = None
-
-    for i, row in enumerate(records, start=2):
-        if str(row.get('Date', '')) == date_str:
-            row_index = i
-            break
-
-    if row_index:
-        sheet.delete_rows(row_index)
-        day_num = int(date_str.split('-')[2])
-        return f"🗑️ ลบข้อมูลยอดปะยางวันที่ {day_num} ({date_str}) เรียบร้อยแล้วครับ"
-    else:
-        return f"⚠️ ไม่พบข้อมูลของวันที่ {date_str} ในตารางครับ"
 
 @app.route("/", methods=['GET'])
 def index():
@@ -92,10 +95,11 @@ def handle_message(event):
         help_text = (
             "📌 คู่มือการใช้งานบอทบันทึกยอดปะยาง\n\n"
             "1. บันทึกยอดวันนี้:\n"
-            "   - พิมพ์ 'ปะยาง 800' หรือ 'ปะยาง = 800'\n\n"
+            "   - พิมพ์ 'ปะยาง 800' หรือ 'ปะยาง = 800'\n"
+            "   - หากหยุดวันนี้ พิมพ์ 'ปะยาง 0'\n\n"
             "2. บันทึกย้อนหลังในเดือนนี้:\n"
             "   - พิมพ์ 'ปะยางวันที่ 9 = 500'\n"
-            "   - พิมพ์ 'ปะยาง วันที่10 = 800 บาท'\n"
+            "   - พิมพ์ 'ปะยาง วันที่10 = 0' (ลบยอดออก)\n"
             "   - พิมพ์ 'บันทึกย้อนหลัง 2026-08-20 1,200'\n\n"
             "3. ลบยอดเงิน:\n"
             "   - พิมพ์ 'ลบยอด32151 18/08/2026'\n"
@@ -106,18 +110,16 @@ def handle_message(event):
             "   - พิมพ์ 'รวมยอดปี2026' (ดูสรุปรายปี)\n"
             "   - พิมพ์ 'หยุดวันอะไร' (ดูวันที่หยุด)"
         )
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=help_text))
+        safe_reply(event.reply_token, help_text)
 
-    # 2. คำสั่งลบยอด (เช่น "ลบยอด32151 18/08/2026" หรือ "ลบยอด32151 2026-08-18")
+    # 2. คำสั่งลบยอด (เช่น "ลบยอด32151 18/08/2026")
     elif user_msg.startswith("ลบยอด32151"):
         target_date = None
         
         if "วันนี้" in user_msg:
             target_date = today_date_str
         else:
-            # รูปแบบ DD/MM/YYYY
             match_dmy = re.search(r'(\d{1,2})/(\d{1,2})/(\d{4})', user_msg)
-            # รูปแบบ YYYY-MM-DD
             match_ymd = re.search(r'(\d{4})-(\d{1,2})-(\d{1,2})', user_msg)
 
             if match_dmy:
@@ -141,7 +143,7 @@ def handle_message(event):
         else:
             reply_txt = "⚠️ รูปแบบคำสั่งไม่ถูกต้อง ตัวอย่าง:\nลบยอด32151 18/08/2026"
 
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_txt))
+        safe_reply(event.reply_token, reply_txt)
 
     # 3. ดูวันที่หยุด
     elif user_msg.startswith("หยุดวันอะไร"):
@@ -193,7 +195,7 @@ def handle_message(event):
         except Exception as e:
             reply_txt = f"เกิดข้อผิดพลาด: {str(e)}"
 
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_txt))
+        safe_reply(event.reply_token, reply_txt)
 
     # 4. ดูสรุปยอดรายปี
     elif user_msg.startswith("รวมยอดปี"):
@@ -227,7 +229,7 @@ def handle_message(event):
         except Exception as e:
             reply_txt = f"เกิดข้อผิดพลาด: {str(e)}"
 
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_txt))
+        safe_reply(event.reply_token, reply_txt)
 
     # 5. ดูสรุปยอดรายเดือน
     elif user_msg.startswith("รวมยอด"):
@@ -276,7 +278,7 @@ def handle_message(event):
         except Exception as e:
             reply_txt = f"เกิดข้อผิดพลาด: {str(e)}"
 
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_txt))
+        safe_reply(event.reply_token, reply_txt)
 
     # 6. บันทึกย้อนหลังรูปแบบเต็ม
     elif user_msg.startswith("บันทึกย้อนหลัง"):
@@ -291,18 +293,25 @@ def handle_message(event):
                 reply_txt = save_or_update_entry(sheet, target_date, amount)
             except Exception as e:
                 reply_txt = f"บันทึกไม่สำเร็จ: {str(e)}"
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_txt))
+            safe_reply(event.reply_token, reply_txt)
 
     # 7. บันทึกย้อนหลังกรณีมีคำว่า "ปะยาง" และ "วันที่"
     elif "ปะยาง" in user_msg and "วันที่" in user_msg:
         match_day = re.search(r'วันที่\s*(\d{1,2})', user_msg)
         numbers = re.findall(r'[\d,]+', user_msg)
         
-        if match_day and len(numbers) >= 2:
+        if match_day and len(numbers) >= 1:
             day_num = int(match_day.group(1))
             amounts = [n.replace(',', '') for n in numbers if int(n.replace(',', '')) != day_num]
-            if amounts and 1 <= day_num <= 31:
+            
+            if not amounts and "0" in user_msg:
+                amount = 0
+            elif amounts:
                 amount = int(amounts[-1])
+            else:
+                amount = None
+
+            if amount is not None and 1 <= day_num <= 31:
                 target_date = f"{now.year}-{now.month:02d}-{day_num:02d}"
                 try:
                     client = get_gspread_client()
@@ -310,7 +319,7 @@ def handle_message(event):
                     reply_txt = save_or_update_entry(sheet, target_date, amount)
                 except Exception as e:
                     reply_txt = f"บันทึกไม่สำเร็จ: {str(e)}"
-                line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_txt))
+                safe_reply(event.reply_token, reply_txt)
 
     # 8. บันทึกยอดวันนี้
     elif "ปะยาง" in user_msg:
@@ -325,4 +334,4 @@ def handle_message(event):
                     reply_txt = save_or_update_entry(sheet, today_date_str, amount)
                 except Exception as e:
                     reply_txt = f"บันทึกไม่สำเร็จ: {str(e)}"
-                line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_txt))
+                safe_reply(event.reply_token, reply_txt)
